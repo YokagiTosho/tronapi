@@ -1,0 +1,23 @@
+name: tronapi
+
+services:
+  tronapi:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    dns: 8.8.8.8
+    environment:
+      API_KEY: ${API_KEY}
+    ports:
+      - 8000:8000
+    depends_on: 
+      - postgres
+  postgres:
+    image: postgres:17-alpine
+    shm_size: 128mb
+    volumes:
+      - ./pgdata:/var/lib/postgresql/data/pgdata
+    environment:
+      POSTGRES_USER: trondb
+      POSTGRES_PASSWORD: ${POSTGRES_PSWD}
+      PGDATA: /var/lib/postgresql/data/pgdata

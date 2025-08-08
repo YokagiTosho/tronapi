@@ -1,15 +1,13 @@
+import os
+
 from fastapi import FastAPI
 
 from tronpy import AsyncTron
 from tronpy.providers import AsyncHTTPProvider
 
-from dotenv import dotenv_values
-
 from typing import Optional
 
-config = dotenv_values(".env")
-
-API_KEY: Optional[str] = config.get("API_KEY")
+API_KEY: Optional[str] = os.getenv("API_KEY", None)
 if API_KEY is None:
     print("API KEY is not specified")
     exit(1)

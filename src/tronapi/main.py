@@ -1,54 +1,30 @@
-import os
-import sys
-
-from dataclasses import dataclass
 from contextlib import asynccontextmanager
+from decimal import Decimal
 
-from fastapi import FastAPI
-
+import sqlalchemy
+import tronpy.exceptions as tron_exc
+from fastapi import FastAPI, HTTPException, Query, Depends
+from pydantic import BaseModel
+from sqlalchemy import DateTime, Integer, String, select
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+from sqlalchemy.sql import func
 from tronpy import AsyncTron
 from tronpy.providers import AsyncHTTPProvider
 
-from typing import Optional
-
-from sqlalchemy.ext.asyncio import async_sessionmaker
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.ext.asyncio import create_async_engine
-
-from sqlalchemy import DECIMAL, Integer, String
-from sqlalchemy import select
-from sqlalchemy.orm import DeclarativeBase
-from sqlalchemy.orm import Mapped
-from sqlalchemy.orm import mapped_column
+from tronapi.config import Config, init_env
 
 
-@dataclass
-class Config:
-    api_key: str
-    db_addr: str
+class AccounInfoModel(BaseModel):
+    energy: int
+    bandwidth: int
+    balance: Decimal
 
 
-def init_env() -> Config:
-    API_KEY: Optional[str] = os.getenv("API_KEY", None)
-    if API_KEY is None:
-        sys.stderr.write("'API_KEY' is not specified")
-        sys.exit(1)
-
-    POSTGRES_USER = os.getenv("POSTGRES_USER", None)
-    if POSTGRES_USER is None:
-        sys.stderr.write("'POSTGRES_USER'  is not specified")
-        sys.exit(1)
-
-    POSTGRES_PASSWORD = os.getenv("POSTGRES_PASSWORD", None)
-    if POSTGRES_PASSWORD is None:
-        sys.stderr.write("'POSTGRES_PASSWORD' is not specified")
-        sys.exit(1)
-
-    DBADDR: str = os.getenv("DBADDR", default="postgres:5432")
-
-    full_db_path = f"{POSTGRES_USER}:{POSTGRES_PASSWORD}@{DBADDR}"
-
-    return Config(api_key=API_KEY, db_addr=full_db_path)
+class WalletInfoModel(BaseModel):
+    address: str
+    row_created_at: str
+    account_info: AccounInfoModel
 
 
 class Base(DeclarativeBase):
@@ -58,80 +34,115 @@ class Base(DeclarativeBase):
 class WalletInfo(Base):
     __tablename__ = "wallet_info"
 
-    id: Mapped[int] = mapped_column(primary_key=True)
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     address: Mapped[str] = mapped_column(String(100))
 
     energy: Mapped[int] = mapped_column(Integer)
     bandwidth: Mapped[int] = mapped_column(Integer)
-    balance: Mapped[int] = mapped_column(DECIMAL)
+    balance: Mapped[Decimal] = mapped_column(sqlalchemy.DECIMAL)
+
+    created_at: Mapped[DateTime] = mapped_column(
+        DateTime(timezone=True), default=func.now()
+    )
 
 
-config = init_env()
+config: Config = init_env()
 
 engine = create_async_engine(f"postgresql+asyncpg://{config.db_addr}", echo=True)
 
-async_session: async_sessionmaker[AsyncSession] = async_sessionmaker(engine)
+async_session: async_sessionmaker[AsyncSession] = async_sessionmaker(
+    engine, expire_on_commit=False
+)
 
 tron_provider = AsyncHTTPProvider(api_key=config.api_key)
 
+# tron = AsyncTron(tron_provider)
+
+
+async def get_tron():
+    async with AsyncTron() as client:
+        yield client
+
+
 @asynccontextmanager
-async def lifespan(app: FastAPI):
+async def lifespan(_: FastAPI):
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     yield
 
+    await engine.dispose()
+
+
 app = FastAPI(lifespan=lifespan)
 
 
-@app.get("/get_last_records/")
-async def get_last_records(page: int = 1):
-    if page < 1:
-        return None
+@app.get("/records/")
+async def records(
+    page: int = Query(1, ge=1), limit: int = Query(10, ge=1, le=50)
+) -> list[WalletInfoModel]:
 
-    limit = 10
-
-    offset = (page-1)*limit
+    offset = (page - 1) * limit
 
     async with async_session() as session:
-        query = select(WalletInfo).offset(offset).limit(limit)
-        result = await session.execute(query)
+        try:
+            query = (
+                select(WalletInfo)
+                .order_by(WalletInfo.id.desc())
+                .offset(offset)
+                .limit(limit)
+            )
 
-        out = []
-        for scalar in result.scalars():
-            out.append({
-                "address": scalar.address,
-                "account_info": {
-                    "energy": scalar.energy,
-                    "bandwidth": scalar.bandwidth,
-                    "trx balance": scalar.balance,
-                },
-            })
+            result = await session.execute(query)
+
+            out: list[WalletInfoModel] = []
+
+            for r in result.scalars().all():
+                out.append(
+                    WalletInfoModel(
+                        address=r.address,
+                        row_created_at=str(r.created_at),
+                        account_info=AccounInfoModel(
+                            energy=r.energy, bandwidth=r.bandwidth, balance=r.balance
+                        ),
+                    )
+                )
+        except Exception as e:
+            print(e)
+            raise HTTPException(status_code=500, detail="Internal server error")
 
     return out
 
 
 @app.post("/wallet/")
-async def wallet_information(address: str):
-    async with AsyncTron(tron_provider) as client:
-        energy = await client.get_energy(address)
-        bandwidth = await client.get_bandwidth(address)
-        balance = await client.get_account_balance(address)
+async def wallet_information(
+    address: str, tron: AsyncTron = Depends(get_tron)
+) -> WalletInfoModel:
+    try:
+        energy: int = await tron.get_energy(address)
+        bandwidth: int = await tron.get_bandwidth(address)
+        balance: Decimal = await tron.get_account_balance(address)
+    except tron_exc.AddressNotFound:
+        raise HTTPException(status_code=400, detail="Address not found")
+    except tron_exc.BadAddress:
+        raise HTTPException(status_code=400, detail="Bad address")
+    except Exception as e:
+        print(e)
+        raise HTTPException(status_code=400, detail="Bad request")
 
     async with async_session() as session:
         async with session.begin():
-            session.add(WalletInfo(
-                address=address,
-                energy=energy,
-                bandwidth=bandwidth,
-                balance=balance
-            ))
-            await session.commit()
+            try:
+                wallet_info = WalletInfo(
+                    address=address, energy=energy, bandwidth=bandwidth, balance=balance
+                )
+                session.add(wallet_info)
+            except Exception as e:
+                raise HTTPException(status_code=500, detail="Internal server error")
 
-    return {
-        "address": address,
-        "account_info": {
-            "energy": energy,
-            "bandwidth": bandwidth,
-            "trx balance": balance,
-        },
-    }
+        return WalletInfoModel(
+            address=address,
+            row_created_at=str(wallet_info.created_at),
+            account_info=AccounInfoModel(
+                energy=energy, bandwidth=bandwidth, balance=balance
+            ),
+        )

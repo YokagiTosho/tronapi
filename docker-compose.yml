@@ -8,16 +8,21 @@ services:
     dns: 8.8.8.8
     environment:
       API_KEY: ${API_KEY}
+      DBADDR: postgres:5432
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
     ports:
       - 8000:8000
     depends_on: 
       - postgres
+    volumes:
+      - ./src/tronapi:/app/tronapi
   postgres:
     image: postgres:17-alpine
     shm_size: 128mb
     volumes:
       - ./pgdata:/var/lib/postgresql/data/pgdata
     environment:
-      POSTGRES_USER: trondb
-      POSTGRES_PASSWORD: ${POSTGRES_PSWD}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       PGDATA: /var/lib/postgresql/data/pgdata

@@ -12,7 +12,7 @@ from sqlalchemy.sql import func
 from tronpy import AsyncTron
 from tronpy.providers import AsyncHTTPProvider
 
-from tronapi.config import Config, init_env
+from tronapi.config import Config, get_config
 
 
 class AccounInfoModel(BaseModel):
@@ -46,7 +46,7 @@ class WalletInfo(Base):
     )
 
 
-config: Config = init_env()
+config: Config = get_config()
 
 engine = create_async_engine(f"postgresql+asyncpg://{config.db_addr}", echo=True)
 
@@ -54,13 +54,13 @@ async_session: async_sessionmaker[AsyncSession] = async_sessionmaker(
     engine, expire_on_commit=False
 )
 
-tron_provider = AsyncHTTPProvider(api_key=config.api_key)
 
-# tron = AsyncTron(tron_provider)
+async def get_tron_provider(config: Config = Depends(get_config)):
+    return AsyncHTTPProvider(api_key=config.api_key)
 
 
-async def get_tron():
-    async with AsyncTron() as client:
+async def get_tron(provider: AsyncHTTPProvider = Depends(get_tron_provider)):
+    async with AsyncTron(provider) as client:
         yield client
 
 

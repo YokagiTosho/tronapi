@@ -1,7 +1,10 @@
 import os
 
+
 from dataclasses import dataclass
 from typing import Optional
+from collections.abc import Callable
+from functools import wraps
 
 @dataclass
 class Config:
@@ -9,7 +12,23 @@ class Config:
     db_addr: str
 
 
-def init_env() -> Config:
+def cache_config(get_cfg: Callable[[], Config]):
+    cached: Optional[Config] = None
+
+    @wraps(get_cfg)
+    def wrapper() -> Config:
+        nonlocal cached
+
+        if cached is None:
+            cached = get_cfg()
+
+        return cached
+
+    return wrapper
+
+
+@cache_config
+def get_config() -> Config:
     API_KEY: Optional[str] = os.getenv("API_KEY", None)
     if not API_KEY:
         raise ValueError("'API_KEY' is not specified in environment variable")

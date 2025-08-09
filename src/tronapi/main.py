@@ -1,21 +1,23 @@
 from contextlib import asynccontextmanager
 from decimal import Decimal
 
-import sqlalchemy
 import tronpy.exceptions as tron_exc
 from fastapi import FastAPI, HTTPException, Query, Depends
 from pydantic import BaseModel
-from sqlalchemy import DateTime, Integer, String, select
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
-from sqlalchemy.sql import func
+
 from tronpy import AsyncTron
 from tronpy.providers import AsyncHTTPProvider
 
 from tronapi.config import Config, get_config
 
+from tronapi.orm import Base, WalletInfo
+from tronapi.orm import get_async_engine, get_async_sessionmaker
 
-class AccounInfoModel(BaseModel):
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncEngine
+
+
+class AccountInfoModel(BaseModel):
     energy: int
     bandwidth: int
     balance: Decimal
@@ -24,35 +26,7 @@ class AccounInfoModel(BaseModel):
 class WalletInfoModel(BaseModel):
     address: str
     row_created_at: str
-    account_info: AccounInfoModel
-
-
-class Base(DeclarativeBase):
-    pass
-
-
-class WalletInfo(Base):
-    __tablename__ = "wallet_info"
-
-    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
-    address: Mapped[str] = mapped_column(String(100))
-
-    energy: Mapped[int] = mapped_column(Integer)
-    bandwidth: Mapped[int] = mapped_column(Integer)
-    balance: Mapped[Decimal] = mapped_column(sqlalchemy.DECIMAL)
-
-    created_at: Mapped[DateTime] = mapped_column(
-        DateTime(timezone=True), default=func.now()
-    )
-
-
-config: Config = get_config()
-
-engine = create_async_engine(f"postgresql+asyncpg://{config.db_addr}", echo=True)
-
-async_session: async_sessionmaker[AsyncSession] = async_sessionmaker(
-    engine, expire_on_commit=False
-)
+    account_info: AccountInfoModel
 
 
 async def get_tron_provider(config: Config = Depends(get_config)):
@@ -66,8 +40,11 @@ async def get_tron(provider: AsyncHTTPProvider = Depends(get_tron_provider)):
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
+    engine: AsyncEngine = get_async_engine()
+
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+
     yield
 
     await engine.dispose()
@@ -78,7 +55,9 @@ app = FastAPI(lifespan=lifespan)
 
 @app.get("/records/")
 async def records(
-    page: int = Query(1, ge=1), limit: int = Query(10, ge=1, le=50)
+    page: int = Query(1, ge=1),
+    limit: int = Query(10, ge=1, le=50),
+    async_session=Depends(get_async_sessionmaker),
 ) -> list[WalletInfoModel]:
 
     offset = (page - 1) * limit
@@ -101,7 +80,7 @@ async def records(
                     WalletInfoModel(
                         address=r.address,
                         row_created_at=str(r.created_at),
-                        account_info=AccounInfoModel(
+                        account_info=AccountInfoModel(
                             energy=r.energy, bandwidth=r.bandwidth, balance=r.balance
                         ),
                     )
@@ -109,13 +88,14 @@ async def records(
         except Exception as e:
             print(e)
             raise HTTPException(status_code=500, detail="Internal server error")
-
     return out
 
 
 @app.post("/wallet/")
 async def wallet_information(
-    address: str, tron: AsyncTron = Depends(get_tron)
+    address: str,
+    tron: AsyncTron = Depends(get_tron),
+    async_session=Depends(get_async_sessionmaker),
 ) -> WalletInfoModel:
     try:
         energy: int = await tron.get_energy(address)
@@ -136,13 +116,17 @@ async def wallet_information(
                     address=address, energy=energy, bandwidth=bandwidth, balance=balance
                 )
                 session.add(wallet_info)
+
+                await session.commit()
+
             except Exception as e:
+                print(e)
                 raise HTTPException(status_code=500, detail="Internal server error")
 
         return WalletInfoModel(
             address=address,
             row_created_at=str(wallet_info.created_at),
-            account_info=AccounInfoModel(
+            account_info=AccountInfoModel(
                 energy=energy, bandwidth=bandwidth, balance=balance
             ),
         )

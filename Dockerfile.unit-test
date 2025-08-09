@@ -6,4 +6,4 @@ COPY requirements.txt .
 
 RUN pip install --no-cache-dir -r requirements.txt
 
-CMD ["pytest", "-v", "tronapi"]
+CMD ["pytest", "-v", "tronapi/tests/test_unit.py"]

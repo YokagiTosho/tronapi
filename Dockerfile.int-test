@@ -1,0 +1,9 @@
+FROM python:3.13.6-slim
+
+WORKDIR /app
+
+COPY requirements.txt .
+
+RUN pip install --no-cache-dir pytest pytest-asyncio httpx
+
+CMD ["pytest", "-v", "tronapi/tests/test_integration.py"]

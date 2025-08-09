@@ -5,8 +5,7 @@ import time
 def test_endpoint():
     tronapi_addr = os.getenv("TRONAPI_ADDR")
 
-    if tronapi_addr is None:
-        raise ValueError("TRONAPI_ADDR is not specified in environment variables")
+    assert tronapi_addr is not None
 
     # wait unit fastapi is fully launched
     time.sleep(2)

@@ -8,16 +8,30 @@ services:
     dns: 8.8.8.8
     environment:
       API_KEY: ${API_KEY}
-      DBADDR: postgres:5432
+      DBADDR: db:5432
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
     ports:
       - 8000:8000
     depends_on: 
-      - postgres
+      - db
+      - tests
     volumes:
       - ./src/tronapi:/app/tronapi
-  postgres:
+  tests:
+    build:
+      context: .
+      dockerfile: Dockerfile.test
+    environment:
+      API_KEY: ${API_KEY}
+      DBADDR: db:5432
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    depends_on: 
+      - db
+    volumes:
+      - ./src/tronapi:/app/tronapi
+  db:
     image: postgres:17-alpine
     shm_size: 128mb
     volumes:

@@ -35,7 +35,7 @@ def get_async_engine() -> AsyncEngine:
     cfg: Config = get_config()
 
     engine: AsyncEngine = create_async_engine(
-        f"postgresql+asyncpg://{cfg.db_addr}", echo=True
+        f"postgresql+asyncpg://{cfg.db_addr}"
     )
 
     return engine
